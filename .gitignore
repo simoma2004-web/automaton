@@ -11,3 +11,7 @@ dist
 .automaton/wallet.json
 .automaton/state.db
 
+
+# Fake-Conway: eigene Einstellungen (evtl. mit API-Key) und Simulationsdaten nicht hochladen
+fake-conway/config.json
+fake-conway/data/

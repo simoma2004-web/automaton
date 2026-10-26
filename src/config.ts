@@ -69,6 +69,14 @@ export function loadConfig(): AutomatonConfig | null {
           ? raw.sandboxId.trim()
           : DEFAULT_CONFIG.sandboxId,
       conwayApiKey: apiKey,
+      // CONWAY_API_URL (z. B. Fake-Conway) hat Vorrang vor der Datei
+      conwayApiUrl:
+        process.env.CONWAY_API_URL || raw.conwayApiUrl || DEFAULT_CONFIG.conwayApiUrl,
+      // In der Fake-Conway-Simulation kein Kontakt zum echten Social-Relay
+      socialRelayUrl:
+        process.env.FAKE_CONWAY === "1"
+          ? undefined
+          : raw.socialRelayUrl ?? DEFAULT_CONFIG.socialRelayUrl,
       treasuryPolicy,
       modelStrategy,
       soulConfig,
@@ -139,7 +147,9 @@ export function createConfig(params: {
     registeredWithConway: params.registeredWithConway,
     sandboxId: normalizedSandboxId,
     conwayApiUrl:
-      DEFAULT_CONFIG.conwayApiUrl || "https://api.conway.tech",
+      process.env.CONWAY_API_URL ||
+      DEFAULT_CONFIG.conwayApiUrl ||
+      "https://api.conway.tech",
     conwayApiKey: params.apiKey,
     openaiApiKey: params.openaiApiKey,
     anthropicApiKey: params.anthropicApiKey,

@@ -29,7 +29,9 @@ function assertSecureUrl(
   }
 
   const host = parsed.hostname.toLowerCase();
-  if (protocol === "http:" && allowHttpOnLoopback && LOOPBACK_HOSTS.has(host)) {
+  // Fake-Conway-Simulation: lokale HTTP-Verbindung zu 127.0.0.1 erlauben
+  const fakeConway = process.env.FAKE_CONWAY === "1";
+  if (protocol === "http:" && (allowHttpOnLoopback || fakeConway) && LOOPBACK_HOSTS.has(host)) {
     return;
   }
 

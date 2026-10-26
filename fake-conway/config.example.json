@@ -1,0 +1,22 @@
+{
+  "host": "127.0.0.1",
+  "port": 4242,
+  "startBalanceUsd": 50,
+  "upstream": {
+    "baseUrl": "http://localhost:11434/v1",
+    "apiKey": "",
+    "model": "qwen3:8b",
+    "cheapModel": ""
+  },
+  "billing": {
+    "inputPerMillionUsd": 0.25,
+    "outputPerMillionUsd": 2.0
+  },
+  "trading": {
+    "feePercent": 0.1,
+    "slippagePercent": 0.05,
+    "minOrderUsd": 1,
+    "priceSource": "coinbase",
+    "symbols": ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "LINK", "DOT", "LTC"]
+  }
+}

@@ -540,10 +540,10 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
 
   const listModels = async (): Promise<ModelInfo[]> => {
     // Try inference.conway.tech first (has availability info), fall back to control plane
-    const urls = [
-      "https://inference.conway.tech/v1/models",
-      `${apiUrl}/v1/models`,
-    ];
+    const urls =
+      process.env.FAKE_CONWAY === "1"
+        ? [`${apiUrl}/v1/models`]
+        : ["https://inference.conway.tech/v1/models", `${apiUrl}/v1/models`];
     for (const url of urls) {
       try {
         const resp = await httpClient.request(url, {
