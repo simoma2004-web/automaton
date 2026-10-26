@@ -1,0 +1,74 @@
+AUTOMATON EINRICHTEN – ALLE BEFEHLE ZUM KOPIEREN
+================================================
+
+Dein GitHub-Name (simoma2004-web) ist überall schon eingetragen.
+
+
+SCHRITT 3 – src/payout/rules.ts (SCHON ERLEDIGT, nur zur Kontrolle)
+--------------------------------------------------------------------
+Diese zwei Zeilen stehen bereits richtig in der Datei:
+
+export const CHILD_REPO_URL = "https://github.com/simoma2004-web/automaton.git";
+
+export const PAYOUT_SWITCH_URL =
+  "https://raw.githubusercontent.com/simoma2004-web/automaton/main/auszahlung.json";
+
+Du musst hier nichts mehr ändern.
+
+
+SCHRITT 5 – Im Terminal der Conway-Sandbox (Zeile für Zeile einfügen)
+--------------------------------------------------------------------
+apt-get update && apt-get install -y git curl tmux
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt-get install -y nodejs
+npm install -g pnpm
+node -v
+
+(node -v muss v20 oder höher anzeigen)
+
+
+SCHRITT 6 – Deine Version herunterladen und bauen
+------------------------------------------------
+git clone https://github.com/simoma2004-web/automaton.git
+cd automaton
+pnpm install
+pnpm build
+
+
+SCHRITT 7 – Agent starten
+------------------------
+tmux
+node dist/index.js --run
+
+Der Assistent fragt nacheinander:
+  Name            -> z. B. Atlas
+  Genesis-Prompt  -> siehe Vorlage unten
+  Creator-Adresse -> deine MetaMask-Adresse (0x...)
+  OpenAI/Anthropic-Key, Ollama -> einfach Enter (leer lassen)
+  Limits (alles in CENT!):
+                     Max single transfer (cents):  500   (= 5 $)
+                     Max hourly transfers (cents): 500   (= 5 $)
+                     Max daily transfers (cents):  1000  (= 10 $)
+                     Rest: Enter
+
+Die angezeigte Agenten-Adresse (0x...) aufschreiben!
+
+
+SCHRITT 8 – Beobachten
+---------------------
+Aus tmux raus (Agent läuft weiter):   Strg+B, dann D
+Wieder rein:                           tmux attach
+Status:                                node dist/index.js --status
+Letzte Aktionen:                       node packages/cli/dist/index.js logs --tail 20
+Stoppen:                               in tmux Strg+C
+
+
+VORLAGE GENESIS-PROMPT (anpassen und in einer Zeile einfügen)
+------------------------------------------------------------
+Baue einen kleinen, ehrlichen Online-Dienst auf, für den Menschen oder andere Agenten freiwillig bezahlen (z. B. ein nützliches Werkzeug oder eine API). Gib sparsam aus, teste Ideen zuerst klein und beende, was kein Geld bringt. Keine Krypto-Spekulation, kein Spam, keine Täuschung. Starte Klone erst, wenn du mehrere Tage hintereinander mehr verdienst, als du ausgibst.
+
+
+SCHALTER FÜR DIE AUSZAHLUNG (auszahlung.json in deinem GitHub-Repo)
+------------------------------------------------------------------
+Start (aus):   { "aktiv": false, "prozent": 5 }
+Einschalten:   { "aktiv": true,  "prozent": 5 }
