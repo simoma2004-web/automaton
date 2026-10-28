@@ -17,6 +17,27 @@
     "slippagePercent": 0.05,
     "minOrderUsd": 1,
     "priceSource": "coinbase",
-    "symbols": ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "LINK", "DOT", "LTC"]
+    "symbols": [
+      "BTC",
+      "ETH",
+      "SOL",
+      "XRP",
+      "ADA",
+      "DOGE",
+      "AVAX",
+      "LINK",
+      "DOT",
+      "LTC"
+    ]
+  },
+  "challenge": {
+    "enabled": true,
+    "monthlyTargetPercent": 5,
+    "periodDays": 30
+  },
+  "leverage": {
+    "enabled": true,
+    "maxLeverage": 10,
+    "maxMarginPercentOfEquity": 20
   }
 }

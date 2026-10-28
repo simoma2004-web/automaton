@@ -9,6 +9,8 @@ Der Agent merkt keinen Unterschied. In Wahrheit gilt:
 | Denken über Conway | Wird an Ollama (oder später OpenAI/Groq/Anthropic) weitergeleitet, die Kosten werden vom Konto abgezogen |
 | Geld verdienen | Paper-Trading mit echten Live-Kursen (Coinbase), 0,1 % Gebühr + Slippage |
 | Kontostand unter 0 | Agent ist tot |
+| Monatsfrist | Alle 30 Tage muss der Gesamtwert mindestens +5 % gestiegen sein, sonst wird er abgeschaltet |
+| Hebel (bis 10x) | Nur nach einem geschafften Monat, max. 20 % des Kapitals, automatische Liquidation; ein Verlust sperrt den Hebel bis Monatsende |
 | Domains, Sandboxes, Überweisungen, Klone | In der Simulation gesperrt |
 
 Status-Seite: **http://localhost:4242** (aktualisiert sich alle 30 Sekunden).
@@ -126,6 +128,8 @@ Dann `fake-conway/config.json` bearbeiten (`nano fake-conway/config.json`):
 - `startBalanceUsd` – Startkapital
 - `billing` – was ihm pro 1 Mio. Tokens fürs Denken berechnet wird. Bei Ollama ist es eigentlich gratis, damit der Test realistisch ist, werden trotzdem Preise wie bei einem günstigen Cloud-Modell abgezogen.
 - `trading.feePercent` – Handelsgebühr
+- `challenge.monthlyTargetPercent` – Monatsziel in Prozent (`"enabled": false` schaltet die Frist ab)
+- `leverage.maxLeverage` / `leverage.maxMarginPercentOfEquity` – maximaler Hebel und wie viel Kapital dafür genutzt werden darf
 
 ### Auf ein Cloud-Modell umstellen (schlauer, kostet echtes Geld)
 In `config.json` bei `upstream` eintragen, und bei `billing` die echten Preise des Modells laut Anbieter-Website:
