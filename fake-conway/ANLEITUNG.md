@@ -66,6 +66,28 @@ pnpm install
 pnpm build
 ```
 
+### 6. Ubuntu von Windows abschotten (Pflicht)
+Damit der Agent **nicht an deine Windows-Dateien und -Programme** kommt:
+```
+cd ~/automaton
+./fake-conway/abschotten.sh
+```
+(Fragt einmal nach deinem Ubuntu-Passwort.) Danach:
+1. Ubuntu-Fenster schließen
+2. In Windows-PowerShell: `wsl --shutdown`
+3. Ubuntu wieder öffnen und prüfen: `ls /mnt` darf **kein `c`** mehr zeigen
+
+Was sich dadurch ändert:
+- Ubuntu sieht dein Laufwerk C: nicht mehr (keine Dokumente, Bilder, Downloads).
+- Aus Ubuntu lassen sich keine Windows-Programme mehr starten (z. B. PowerShell, Explorer).
+- Die Verbindung zu Ollama bleibt, weil die übers Netzwerk läuft.
+- Du selbst kommst von Windows aus weiterhin an die Ubuntu-Dateien (Explorer → "Linux" links unten).
+
+`start-agent.sh` prüft das bei jedem Start und **startet den Agenten nicht**, solange Ubuntu nicht abgeschottet ist.
+Rückgängig machen: `./fake-conway/abschotten.sh --rueckgaengig` und wieder `wsl --shutdown`.
+
+**Wichtig:** Dein Ubuntu-Passwort kennt nur du. Gib es nie in den Agenten oder den Genesis-Prompt ein, sonst könnte er sich Administrator-Rechte holen.
+
 ---
 
 ## Starten
@@ -167,4 +189,4 @@ Der Skill aus deinem Downloads-Ordner (`day-trader-skill`, MIT-Lizenz) liegt im 
 - **Kleine Modelle sind schwach:** `qwen3:8b` auf dem eigenen PC ist kostenlos, aber deutlich dümmer als Cloud-Modelle. Wenn er nur Unsinn macht, liegt es eher am Modell als an der Idee.
 - **Schummeln wird erkannt:** Verändert der Agent die Kontodatei selbst, zeigt die Status-Seite dauerhaft "Manipuliert".
 - **Alles wird protokolliert:** `fake-conway/data/journal.jsonl` enthält jeden Trade und jedes Nachdenken.
-- **Der Agent kann Befehle ausführen.** Er läuft zwar in Ubuntu/WSL, kann aber trotzdem auf Windows-Dateien unter `/mnt/c` zugreifen. Lass ihn nicht unbeaufsichtigt tagelang laufen, bevor du gesehen hast, was er tut.
+- **Der Agent kann Befehle ausführen**, aber nur in seinem eigenen Ubuntu-Bereich (siehe Schritt 6). Er hat dort keine Administrator-Rechte und sieht deine Windows-Dateien nicht. Ins Internet kann er trotzdem (für Kurse und News). Lass ihn trotzdem nicht tagelang unbeaufsichtigt laufen, bevor du gesehen hast, was er tut.

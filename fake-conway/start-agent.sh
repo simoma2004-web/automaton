@@ -11,6 +11,32 @@ if ! curl -s -m 3 "http://127.0.0.1:${PORT}/v1/credits/balance" > /dev/null; the
   exit 1
 fi
 
+# Sicherheitsprüfung: Der Agent darf nicht an Windows-Dateien oder Windows-Programme kommen.
+if [[ "${AGENT_WINDOWS_ERLAUBT:-}" != "1" ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+  probleme=()
+  for d in /mnt/[a-z]; do
+    if [[ -d "$d" ]] && [[ -n "$(ls -A "$d" 2>/dev/null | head -1)" ]]; then
+      probleme+=("Windows-Laufwerk $d ist eingebunden")
+    fi
+  done
+  if [[ -e /proc/sys/fs/binfmt_misc/WSLInterop ]] || [[ -e /proc/sys/fs/binfmt_misc/WSLInterop-late ]]; then
+    probleme+=("Windows-Programme (cmd.exe, powershell.exe) können gestartet werden")
+  fi
+  if (( ${#probleme[@]} > 0 )); then
+    echo "STOPP: Ubuntu ist noch nicht von Windows abgeschottet:"
+    for p in "${probleme[@]}"; do echo "  - $p"; done
+    echo
+    echo "Einmal ausführen:  ./fake-conway/abschotten.sh"
+    echo "Dann in Windows-PowerShell:  wsl --shutdown  und Ubuntu neu öffnen."
+    exit 1
+  fi
+fi
+
+if [[ "$(id -u)" == "0" ]]; then
+  echo "STOPP: Den Agenten nicht als root starten (sonst darf er alles in Ubuntu). Normales Benutzerkonto verwenden."
+  exit 1
+fi
+
 if [[ -n "${OLLAMA_BASE_URL:-}" ]]; then
   echo "Hinweis: OLLAMA_BASE_URL ist gesetzt. Dann würde der Agent an der Fake-Conway"
   echo "vorbei direkt mit Ollama reden und nichts bezahlen. Wird für diesen Start entfernt."
