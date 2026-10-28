@@ -7,7 +7,8 @@ Der Agent merkt keinen Unterschied. In Wahrheit gilt:
 |---|---|
 | Conway-Guthaben | Virtuelles Konto, Start 50 $ |
 | Denken über Conway | Wird an Ollama (oder später OpenAI/Groq/Anthropic) weitergeleitet, die Kosten werden vom Konto abgezogen |
-| Geld verdienen | Paper-Trading mit echten Live-Kursen (Coinbase), 0,1 % Gebühr + Slippage |
+| Geld verdienen | Paper-Trading mit echten Live-Kursen: Krypto rund um die Uhr (Coinbase, 0,1 % Gebühr), US-Aktien zu Börsenzeiten (Yahoo, 15:30–22:00 Uhr) |
+| Day-Trader-Skill | Für Aktien nutzt der Agent den Day-Trader-Skill: Scanner → Einstieg → Stop/Ziel → Zeitmaschine → Positionsgröße → Risiko-Check → Order. Stop, Ziel und Glattstellen um 21:55 Uhr überwacht die Simulation selbst |
 | Kontostand unter 0 | Agent ist tot |
 | Monatsfrist | Alle 30 Tage muss der Gesamtwert mindestens +5 % gestiegen sein, sonst wird er abgeschaltet |
 | Hebel (bis 10x) | Nur nach einem geschafften Monat, max. 20 % des Kapitals, automatische Liquidation; ein Verlust sperrt den Hebel bis Monatsende |
@@ -41,21 +42,13 @@ Dann in PowerShell: `wsl --shutdown` und Ubuntu neu öffnen.
 (Braucht Windows 11. Bei Windows 10 sag Bescheid, dann machen wir es anders.)
 
 ### 3. Ollama vorbereiten (auf Windows)
-Der Agent schickt bei jedem Nachdenken sehr viel Text (ca. 12.000 Tokens). Ollama nimmt standardmäßig viel weniger an.
-
-1. Windows-Suche: **"Umgebungsvariablen für dieses Konto bearbeiten"**
-2. Neu → Name `OLLAMA_CONTEXT_LENGTH`, Wert `32768`
-3. Ollama komplett beenden (Symbol unten rechts → Quit) und neu starten
-4. In PowerShell das Modell laden:
-   ```
-   ollama pull qwen3:8b
-   ```
-   (ca. 5 GB, braucht etwa 8 GB freien Arbeitsspeicher)
+**Schon erledigt:** Ollama ist installiert, in der Ollama-App ist unter Settings die *Context length* auf **32k** gestellt und das Modell `qwen3:8b` geladen.
+(Falls du es irgendwann neu machen musst: Ollama-App → Settings → Context length 32k, dann im Chat das Modell `qwen3:8b` auswählen und eine Nachricht schicken, dann lädt es sich.)
 
 ### 4. Programme in Ubuntu installieren
 Im Ubuntu-Fenster, Zeile für Zeile:
 ```
-sudo apt-get update && sudo apt-get install -y git curl
+sudo apt-get update && sudo apt-get install -y git curl python3
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
 sudo apt-get install -y nodejs
 sudo npm install -g pnpm
@@ -145,6 +138,26 @@ Den API-Key nicht in die Datei schreiben, sondern beim Start mitgeben:
 UPSTREAM_API_KEY=dein-key ./fake-conway/start-fake-conway.sh
 ```
 Und beim Anbieter unbedingt ein **Ausgabenlimit** setzen.
+
+---
+
+## Day-Trader-Skill (US-Aktien)
+
+Der Skill aus deinem Downloads-Ordner (`day-trader-skill`, MIT-Lizenz) liegt im Repo unter `fake-conway/day-trader-skill`.
+`start-agent.sh` richtet ihn bei jedem Start automatisch ein:
+
+- die Werkzeuge nach `~/day-trader-skill`
+- eine Kurzanleitung als Agenten-Skill nach `~/.automaton/skills/day-trader`
+- beim ersten Mal die Regeln nach `~/trader/config.json`
+
+**Die Regeln für das kleine Konto** (`~/trader/config.json`): höchstens 1,50 $ Verlust pro Trade, 3 $ pro Tag, 3 Trades pro Tag, Ziel mindestens 1,5× so groß wie das Risiko, keine Käufe vor 15:45 und nach 21:30 Uhr, alles bis 21:55 Uhr glattstellen. Das Budget passt sich automatisch an den Kontostand an.
+
+**Was anders ist als im Original-Skill:** Statt `trader-broker` (Alpaca + dein Ja) schickt `paper_broker.py` die Order an die Simulation, aber **nur, wenn trader-risk genau diese Order heute mit PASS geprüft hat**. Das ist nur für Spielgeld gedacht. Mit echtem Geld gehört dein Ja wieder vor jede Order.
+
+**Gut zu wissen:**
+- Mit 50 $ gehen nur ganze Aktien. Teure Aktien wie Tesla lehnt die Positionsgröße ab, er handelt also eher günstige Werte (Liste in `paper-watchlist.txt`).
+- Die SEC-Meldungen in den News brauchen deinen Namen und deine E-Mail in `~/trader/config.json` bei `sec_user_agent` (z. B. `"Simon Marschke deine@mail.de"`). Ohne werden sie einfach übersprungen.
+- Getestet mit den echten Tesla-Daten aus dem Skill (19.10.2026): Einstieg, Stop 358,32, Ziel 370,04, 8 Stück, Risiko-Check PASS, Order ausgeführt, Ziel automatisch verkauft.
 
 ---
 

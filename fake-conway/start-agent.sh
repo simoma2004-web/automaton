@@ -23,6 +23,21 @@ if [[ ! -f dist/index.js ]]; then
   pnpm build
 fi
 
+# Day-Trader-Skill für den Agenten bereitstellen (Werkzeuge nach ~/day-trader-skill,
+# Kurzanleitung als Automaton-Skill, Regeln einmalig nach ~/trader/config.json)
+if command -v python3 > /dev/null; then
+  rm -rf "$HOME/day-trader-skill"
+  cp -r fake-conway/day-trader-skill "$HOME/day-trader-skill"
+  mkdir -p "$HOME/.automaton/skills/day-trader" "$HOME/trader"
+  cp fake-conway/automaton-skills/day-trader/SKILL.md "$HOME/.automaton/skills/day-trader/SKILL.md"
+  if [[ ! -f "$HOME/trader/config.json" ]]; then
+    cp fake-conway/day-trader-skill/paper-config.json "$HOME/trader/config.json"
+  fi
+else
+  echo "Hinweis: python3 fehlt, der Day-Trader-Skill wird nicht eingerichtet (sudo apt-get install -y python3)."
+fi
+
 export FAKE_CONWAY=1
+export FAKE_CONWAY_URL="http://127.0.0.1:${PORT}"
 export CONWAY_API_URL="http://127.0.0.1:${PORT}"
 exec node dist/index.js --run

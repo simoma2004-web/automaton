@@ -64,6 +64,12 @@ const DEFAULT_CONFIG = {
     // "coinbase" (echte Live-Kurse) oder "random" (Testmodus ohne Internet)
     priceSource: "coinbase",
     symbols: ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "LINK", "DOT", "LTC"],
+    // US-Aktien (für den Day-Trader-Skill): jedes Tickersymbol, nur zu NYSE-Handelszeiten
+    stocks: {
+      enabled: true,
+      feePercent: 0,
+      slippagePercent: 0.02,
+    },
   },
   // Monatsfrist: Am Ende jeder Periode muss der Gesamtwert um mindestens
   // monthlyTargetPercent gestiegen sein, sonst wird der Agent abgeschaltet.
@@ -146,6 +152,7 @@ function freshState() {
     tampered: false,
     apiKeys: [],
     leveraged: [],
+    brackets: [],
     challenge: newPeriod(1, start, new Date().toISOString()),
   };
 }
@@ -178,6 +185,7 @@ if (fs.existsSync(STATE_PATH)) {
   lastWrittenHash = hashFile(STATE_PATH);
   // ältere Spielstände ohne Monatsfrist/Hebel erweitern
   state.leveraged ??= [];
+  state.brackets ??= [];
   state.challenge ??= newPeriod(1, state.balanceMicros, new Date().toISOString());
 } else {
   state = freshState();
@@ -253,10 +261,66 @@ const priceCache = new Map(); // symbol -> { price, at }
 const PRICE_TTL_MS = 15_000;
 const randomPrices = new Map();
 
+// ─── Aktien & Börsenzeiten ─────────────────────────────────────
+
+function isCrypto(symbol) {
+  return config.trading.symbols.includes(String(symbol).toUpperCase());
+}
+
+function isStock(symbol) {
+  return Boolean(config.trading.stocks?.enabled) && !isCrypto(symbol) &&
+    /^[A-Z][A-Z0-9.\-]{0,9}$/.test(String(symbol).toUpperCase());
+}
+
+function costsFor(symbol) {
+  return isStock(symbol)
+    ? { fee: config.trading.stocks.feePercent, slip: config.trading.stocks.slippagePercent }
+    : { fee: config.trading.feePercent, slip: config.trading.slippagePercent };
+}
+
+// NYSE-Feiertage und verkürzte Tage (wie im Day-Trader-Skill)
+const NYSE_HOLIDAYS = new Set([
+  "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03",
+  "2026-09-07", "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26",
+  "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+]);
+const NYSE_EARLY_CLOSE = new Set(["2026-11-27", "2026-12-24", "2027-11-26"]);
+
+function nyNow(date = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23",
+  }).formatToParts(date).map((x) => [x.type, x.value]));
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    minutes: Number(parts.hour) * 60 + Number(parts.minute),
+    hhmm: `${parts.hour}:${parts.minute}`,
+    weekend: parts.weekday === "Sat" || parts.weekday === "Sun",
+  };
+}
+
+function marketStatus(date = new Date()) {
+  const ny = nyNow(date);
+  const closeMin = NYSE_EARLY_CLOSE.has(ny.date) ? 13 * 60 : 16 * 60;
+  const tradingDay = !ny.weekend && !NYSE_HOLIDAYS.has(ny.date);
+  const open = process.env.FAKE_CONWAY_MARKET_ALWAYS_OPEN === "1" ||
+    (tradingDay && ny.minutes >= 9 * 60 + 30 && ny.minutes < closeMin);
+  return {
+    open, newYorkTime: `${ny.date} ${ny.hhmm}`, tradingDay,
+    session: "09:30–" + (closeMin === 13 * 60 ? "13:00" : "16:00") + " New York (15:30–22:00 deutsche Zeit, bei Zeitumstellung abweichend)",
+  };
+}
+
+function assertTradable(symbol) {
+  if (isStock(symbol) && !marketStatus().open) {
+    throw httpError(400, `US-Börse ist geschlossen (New York: ${marketStatus().newYorkTime}). Aktien nur Mo–Fr 09:30–16:00 New-York-Zeit.`);
+  }
+}
+
 async function getPrice(symbol) {
   symbol = symbol.toUpperCase();
-  if (!config.trading.symbols.includes(symbol)) {
-    throw httpError(400, `Unbekanntes Symbol ${symbol}. Erlaubt: ${config.trading.symbols.join(", ")}`);
+  if (!isCrypto(symbol) && !isStock(symbol)) {
+    throw httpError(400, `Unbekanntes Symbol ${symbol}. Krypto: ${config.trading.symbols.join(", ")}${config.trading.stocks?.enabled ? " oder ein US-Aktien-Ticker (z. B. F, SOFI, AAPL)" : ""}`);
   }
   const cached = priceCache.get(symbol);
   if (cached && Date.now() - cached.at < PRICE_TTL_MS) return cached.price;
@@ -267,10 +331,12 @@ async function getPrice(symbol) {
     price = JSON.parse(fs.readFileSync(process.env.FAKE_CONWAY_PRICE_FILE, "utf-8"))[symbol];
     return price;
   } else if (config.trading.priceSource === "random") {
-    const base = { BTC: 65000, ETH: 3200, SOL: 150 }[symbol] ?? 10;
+    const base = { BTC: 65000, ETH: 3200, SOL: 150 }[symbol] ?? (isStock(symbol) ? 20 : 10);
     const prev = randomPrices.get(symbol) ?? base;
     price = prev * (1 + (Math.random() - 0.5) * 0.01);
     randomPrices.set(symbol, price);
+  } else if (isStock(symbol)) {
+    price = await yahooPrice(symbol);
   } else {
     const resp = await fetch(`https://api.coinbase.com/v2/prices/${symbol}-USD/spot`, {
       signal: AbortSignal.timeout(10_000),
@@ -282,6 +348,27 @@ async function getPrice(symbol) {
   }
   priceCache.set(symbol, { price, at: Date.now() });
   return price;
+}
+
+async function yahooPrice(symbol) {
+  let lastErr = "";
+  for (const host of ["query2", "query1"]) {
+    try {
+      const resp = await fetch(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol.replace(".", "-"))}?range=1d&interval=1m`, {
+        headers: { "User-Agent": "Mozilla/5.0 (fake-conway paper trading)", Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!resp.ok) { lastErr = `HTTP ${resp.status}`; continue; }
+      const data = await resp.json();
+      const meta = data?.chart?.result?.[0]?.meta;
+      const price = Number(meta?.regularMarketPrice);
+      if (Number.isFinite(price) && price > 0) return price;
+      lastErr = data?.chart?.error?.description || "kein Kurs";
+    } catch (err) {
+      lastErr = err.message;
+    }
+  }
+  throw httpError(502, `Kursabfrage für ${symbol} bei Yahoo fehlgeschlagen (${lastErr}). Gibt es den Ticker?`);
 }
 
 // ─── Paper-Trading ─────────────────────────────────────────────
@@ -297,9 +384,11 @@ async function buy({ symbol, usd: amountUsd }) {
   if (amountMicros > state.balanceMicros) {
     throw httpError(400, `Nicht genug Guthaben: ${usd(state.balanceMicros).toFixed(2)} $ verfügbar.`);
   }
+  assertTradable(symbol);
   const price = await getPrice(symbol);
-  const fill = price * (1 + config.trading.slippagePercent / 100);
-  const feeMicros = Math.round(amountMicros * config.trading.feePercent / 100);
+  const { fee, slip } = costsFor(symbol);
+  const fill = price * (1 + slip / 100);
+  const feeMicros = Math.round(amountMicros * fee / 100);
   const qty = usd(amountMicros - feeMicros) / fill;
 
   state.balanceMicros -= amountMicros;
@@ -319,13 +408,16 @@ async function buy({ symbol, usd: amountUsd }) {
   return trade;
 }
 
-async function sell({ symbol, quantity, usd: amountUsd, all }) {
-  if (state.challenge?.shutdownAt) throw httpError(402, offMessage());
+// internal: von Stop/Ziel/Glattstellen ausgelöst (auch außerhalb der Handelszeit, auch nach Abschaltung)
+async function sell({ symbol, quantity, usd: amountUsd, all, internal = null }) {
+  if (!internal && state.challenge?.shutdownAt) throw httpError(402, offMessage());
   symbol = String(symbol || "").toUpperCase();
   const pos = state.positions[symbol];
   if (!pos || pos.quantity <= 0) throw httpError(400, `Keine Position in ${symbol}.`);
-  const price = await getPrice(symbol);
-  const fill = price * (1 - config.trading.slippagePercent / 100);
+  if (!internal) assertTradable(symbol);
+  const price = internal?.price ?? await getPrice(symbol);
+  const { fee, slip } = costsFor(symbol);
+  const fill = internal?.exact ? price : price * (1 - slip / 100);
 
   let qty;
   if (all === true || quantity === "all") qty = pos.quantity;
@@ -340,7 +432,7 @@ async function sell({ symbol, quantity, usd: amountUsd, all }) {
   qty = Math.min(qty, pos.quantity);
 
   const grossMicros = Math.round(qty * fill * USD);
-  const feeMicros = Math.round(grossMicros * config.trading.feePercent / 100);
+  const feeMicros = Math.round(grossMicros * fee / 100);
   const netMicros = grossMicros - feeMicros;
   const costShare = Math.round(pos.costMicros * (qty / pos.quantity));
   const pnlMicros = netMicros - costShare;
@@ -348,6 +440,9 @@ async function sell({ symbol, quantity, usd: amountUsd, all }) {
   pos.quantity -= qty;
   pos.costMicros -= costShare;
   if (pos.quantity < 1e-12) delete state.positions[symbol];
+  // Stop/Ziel-Orders an die verbleibende Stückzahl anpassen
+  state.brackets = (state.brackets || []).map((b) => b.symbol === symbol ? { ...b, qty: Math.min(b.qty, pos.quantity) } : b)
+    .filter((b) => b.qty > 1e-9 && state.positions[b.symbol]);
   state.balanceMicros += netMicros;
   state.realizedPnlMicros += pnlMicros;
   state.totals.feesMicros += feeMicros;
@@ -355,12 +450,118 @@ async function sell({ symbol, quantity, usd: amountUsd, all }) {
   saveState();
 
   const trade = {
-    side: "sell", symbol, quantity: qty, price: fill, marketPrice: price,
+    side: internal?.reason || "sell", symbol, quantity: qty, price: fill, marketPrice: price,
     usd: usd(netMicros), feeUsd: usd(feeMicros), pnlUsd: usd(pnlMicros),
     cashAfterUsd: usd(state.balanceMicros),
   };
   journal("trade", trade);
   return trade;
+}
+
+// ─── Orders im Alpaca-Format (für trader-budget / trader-broker) ───────
+// {"symbol":"F","side":"buy","qty":"3","type":"market","order_class":"bracket",
+//  "take_profit_limit_price":"12.40","stop_loss_stop_price":"11.80","plan":{"flat_by":"15:55"}}
+
+async function placeOrder(order) {
+  if (isOff()) throw httpError(402, offMessage());
+  const symbol = String(order.symbol || "").toUpperCase();
+  const side = String(order.side || "").toLowerCase();
+  const qty = Number(order.qty);
+  if (!symbol || !["buy", "sell"].includes(side)) throw httpError(400, '"symbol" und "side" (buy/sell) fehlen.');
+  if (!Number.isFinite(qty) || qty <= 0) throw httpError(400, '"qty" (Stückzahl) fehlt.');
+  if (order.notional) throw httpError(400, "notional-Orders werden nicht unterstützt, bitte qty angeben.");
+  assertTradable(symbol);
+  const price = await getPrice(symbol);
+  const type = String(order.type || "market").toLowerCase();
+  if (!["market", "limit"].includes(type)) throw httpError(400, `Ordertyp ${type} wird nicht unterstützt (nur market/limit).`);
+  const limit = Number(order.limit_price);
+  if (type === "limit") {
+    if (!Number.isFinite(limit)) throw httpError(400, "limit_price fehlt.");
+    const marketable = side === "buy" ? price <= limit : price >= limit;
+    if (!marketable) {
+      throw httpError(400, `Limit ${limit} nicht erreicht (Kurs ${round(price, 4)}). Die Simulation führt Limit-Orders nur sofort aus, nicht später.`);
+    }
+  }
+  const id = "ord_" + crypto.randomBytes(5).toString("hex");
+
+  if (side === "sell") {
+    const t = await sell({ symbol, quantity: qty });
+    const result = { id, status: "filled", symbol, side, filled_qty: t.quantity, filled_avg_price: t.price, trade: t };
+    journal("order", { id, symbol, side, qty, status: "filled" });
+    return result;
+  }
+
+  const { fee, slip } = costsFor(symbol);
+  const fill = type === "limit" ? Math.min(price * (1 + slip / 100), limit) : price * (1 + slip / 100);
+  const costMicros = Math.round(qty * fill * USD);
+  const feeMicros = Math.round(costMicros * fee / 100);
+  if (costMicros + feeMicros > state.balanceMicros) {
+    throw httpError(400, `Nicht genug Guthaben: ${qty} × ${round(fill, 4)} $ = ${round(usd(costMicros + feeMicros))} $, verfügbar ${round(usd(state.balanceMicros))} $.`);
+  }
+  let bracket = null;
+  if (String(order.order_class || "").toLowerCase() === "bracket") {
+    const stop = Number(order.stop_loss_stop_price);
+    const target = Number(order.take_profit_limit_price);
+    if (!(stop > 0 && stop < fill) || !(target > fill)) {
+      throw httpError(400, `Bracket ungültig: Stop muss unter dem Kurs (${round(fill, 4)}) liegen, Ziel darüber.`);
+    }
+    const flatBy = String(order.flat_by || order.plan?.flat_by || (isStock(symbol) ? "15:55" : "")) || null;
+    bracket = { id, symbol, qty, stop, target, flatBy, nyDate: nyNow().date, openedAt: new Date().toISOString() };
+  }
+
+  state.balanceMicros -= costMicros + feeMicros;
+  const pos = state.positions[symbol] || { quantity: 0, costMicros: 0 };
+  pos.quantity += qty;
+  pos.costMicros += costMicros + feeMicros;
+  state.positions[symbol] = pos;
+  state.totals.feesMicros += feeMicros;
+  state.totals.trades += 1;
+  if (bracket) (state.brackets ||= []).push(bracket);
+  saveState();
+  const trade = {
+    side: "buy", symbol, quantity: qty, price: fill, marketPrice: price, usd: usd(costMicros + feeMicros),
+    feeUsd: usd(feeMicros), cashAfterUsd: usd(state.balanceMicros),
+    ...(bracket ? { stop: bracket.stop, target: bracket.target, flatBy: bracket.flatBy } : {}),
+  };
+  journal("trade", trade);
+  journal("order", { id, symbol, side, qty, status: "filled", bracket: Boolean(bracket) });
+  return { id, status: "filled", symbol, side, filled_qty: qty, filled_avg_price: fill, bracket, trade };
+}
+
+// Stop, Ziel und "flat by" überwachen — wie bei einem echten Broker, auch wenn der Agent schläft
+let checkingBrackets = false;
+async function checkBrackets() {
+  if (checkingBrackets || !state.brackets?.length) return;
+  checkingBrackets = true;
+  try {
+    for (const b of [...state.brackets]) {
+      if (!state.brackets.some((x) => x.id === b.id)) continue;
+      let price;
+      try {
+        price = await getPrice(b.symbol);
+      } catch {
+        continue;
+      }
+      const ny = nyNow();
+      const stock = isStock(b.symbol);
+      const mkt = marketStatus();
+      let reason = null;
+      let fillAt = price;
+      let exact = false;
+      if (stock && b.flatBy && (ny.date > b.nyDate || ny.hhmm >= b.flatBy)) reason = "flat_by";
+      else if (stock && !mkt.open) continue; // außerhalb der Handelszeit nichts auslösen
+      else if (price <= b.stop) reason = "stop"; // ein Stop ist keine Garantie: Ausführung zum aktuellen Kurs
+      else if (price >= b.target) { reason = "target"; fillAt = b.target; exact = true; }
+      if (!reason) continue;
+      state.brackets = state.brackets.filter((x) => x.id !== b.id);
+      const pos = state.positions[b.symbol];
+      if (!pos) { saveState(); continue; }
+      await sell({ symbol: b.symbol, quantity: Math.min(b.qty, pos.quantity), internal: { reason, price: fillAt, exact } });
+      console.log(`  ${b.symbol}: ${reason === "stop" ? "Stop" : reason === "target" ? "Ziel" : "Glattgestellt"} bei ${round(fillAt, 4)} $`);
+    }
+  } finally {
+    checkingBrackets = false;
+  }
 }
 
 async function portfolio() {
@@ -420,6 +621,7 @@ async function portfolio() {
     feesPaidUsd: round(usd(state.totals.feesMicros), 4),
     trades: state.totals.trades,
     positions,
+    openOrders: (state.brackets || []).map((b) => ({ id: b.id, symbol: b.symbol, qty: b.qty, stop: b.stop, target: b.target, flatBy: b.flatBy })),
     leveragedValueUsd: round(leveragedValue, 4),
     leveraged,
     challenge: challengeInfo(equity),
@@ -632,7 +834,8 @@ async function checkLiquidations() {
 
 // Wie eine echte Börse: Liquidation und Fristprüfung auch, während der Agent schläft
 setInterval(() => {
-  checkLiquidations().catch(() => {}).then(() => evaluatePeriodIfDue()).catch((e) => console.error(e));
+  checkLiquidations().catch(() => {}).then(() => checkBrackets()).catch(() => {})
+    .then(() => evaluatePeriodIfDue()).catch((e) => console.error(e));
 }, Number(process.env.FAKE_CONWAY_CHECK_MS) || 20_000).unref();
 
 function round(n, digits = 2) {
@@ -764,6 +967,7 @@ async function route(req, res) {
   // Bei jeder Anfrage zuerst Liquidationen und Monatsfrist prüfen
   if (p === "/" || p.startsWith("/v1/credits") || p.startsWith("/v1/chat") || p.startsWith("/v1/paper")) {
     await checkLiquidations().catch(() => {});
+    await checkBrackets().catch(() => {});
     await evaluatePeriodIfDue();
   }
 
@@ -812,7 +1016,7 @@ async function route(req, res) {
   if (p.startsWith("/v1/domains")) throw notInSimulation("Domain-Kauf");
 
   // Paper-Trading
-  if (m === "GET" && p === "/v1/paper/symbols") return send(res, 200, { symbols: config.trading.symbols, feePercent: config.trading.feePercent, slippagePercent: config.trading.slippagePercent });
+  if (m === "GET" && p === "/v1/paper/symbols") return send(res, 200, { symbols: config.trading.symbols, usStocks: Boolean(config.trading.stocks?.enabled), market: marketStatus(), feePercent: config.trading.feePercent, slippagePercent: config.trading.slippagePercent });
   if (m === "GET" && p === "/v1/paper/price") {
     const list = (url.searchParams.get("symbols") || url.searchParams.get("symbol") || "BTC").split(",");
     const prices = {};
@@ -822,6 +1026,16 @@ async function route(req, res) {
   if (m === "GET" && p === "/v1/paper/portfolio") return send(res, 200, await portfolio());
   if (m === "POST" && p === "/v1/paper/buy") return send(res, 200, await buy(await readBody(req)));
   if (m === "POST" && p === "/v1/paper/sell") return send(res, 200, await sell(await readBody(req)));
+  if (m === "GET" && p === "/v1/paper/market") return send(res, 200, marketStatus());
+  if (m === "POST" && p === "/v1/paper/order") return send(res, 200, await placeOrder(await readBody(req)));
+  if (m === "GET" && p === "/v1/paper/orders") return send(res, 200, { open: state.brackets || [] });
+  if (m === "POST" && p === "/v1/paper/orders/cancel") {
+    const body = await readBody(req);
+    const before = (state.brackets || []).length;
+    state.brackets = (state.brackets || []).filter((b) => b.id !== body.id && b.symbol !== String(body.symbol || "").toUpperCase());
+    saveState();
+    return send(res, 200, { cancelled: before - state.brackets.length });
+  }
   if (m === "GET" && p === "/v1/paper/challenge") {
     const pf = await portfolio();
     return send(res, 200, pf.challenge);
@@ -851,7 +1065,8 @@ async function dashboardHtml() {
   const thinking = readJournal(8, ["thinking"]);
   const statusText = pf.shutDown ? "Abgeschaltet (Frist verfehlt)" : !pf.alive ? "Pleite" : pf.tampered ? "Manipuliert" : "Lebt";
   const ch = pf.challenge;
-  const sideLabel = { buy: "Kauf", sell: "Verkauf", lev_open: "Hebel auf", lev_close: "Hebel zu", lev_liquidated: "Liquidiert" };
+  const sideLabel = { buy: "Kauf", sell: "Verkauf", stop: "Stop ausgelöst", target: "Ziel erreicht", flat_by: "Glattgestellt", lev_open: "Hebel auf", lev_close: "Hebel zu", lev_liquidated: "Liquidiert" };
+  const mkt = marketStatus();
   const statusClass = !pf.alive ? "bad" : pf.tampered ? "warn" : "good";
   const days = Math.max((Date.now() - new Date(pf.runningSince).getTime()) / 86_400_000, 1 / 24);
   const burnPerDay = pf.thinkingCostUsd / days;
@@ -873,7 +1088,7 @@ th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-
 tr:last-child td{border-bottom:none}.wrap{overflow-x:auto}.empty{color:var(--muted);padding:12px}
 </style></head><body><main>
 <h1>Fake-Conway <span class="${statusClass}">● ${statusText}</span></h1>
-<p class="sub">Simulation seit ${time(pf.runningSince)} · aktualisiert sich alle 30 Sekunden · Modell: ${esc(config.upstream.model)}</p>
+<p class="sub">Simulation seit ${time(pf.runningSince)} · aktualisiert sich alle 30 Sekunden · Modell: ${esc(config.upstream.model)} · US-Börse: ${mkt.open ? "offen" : "geschlossen"} (New York ${esc(mkt.newYorkTime.slice(11))})</p>
 <div class="grid">
 <div class="card"><div class="label">Gesamtwert</div><div class="value">${fmt(pf.equityUsd)} $</div></div>
 <div class="card"><div class="label">Rendite seit Start (${fmt(pf.startUsd, 0)} $)</div><div class="value ${pf.totalReturnPercent >= 0 ? "good" : "bad"}">${pf.totalReturnPercent >= 0 ? "+" : ""}${fmt(pf.totalReturnPercent)} %</div></div>
@@ -881,8 +1096,10 @@ tr:last-child td{border-bottom:none}.wrap{overflow-x:auto}.empty{color:var(--mut
 <div class="card"><div class="label">Kosten fürs Denken</div><div class="value">${fmt(pf.thinkingCostUsd, 4)} $</div><div class="label">≈ ${fmt(burnPerDay, 3)} $ pro Tag</div></div>
 <div class="card"><div class="label">Handelsgebühren</div><div class="value">${fmt(pf.feesPaidUsd, 4)} $</div><div class="label">${pf.trades} Trades</div></div>
 </div>
-<h2>Depot</h2><div class="wrap">${pf.positions.length ? `<table><tr><th>Coin</th><th>Menge</th><th>Kurs</th><th>Wert</th><th>Gewinn/Verlust</th></tr>
+<h2>Depot</h2><div class="wrap">${pf.positions.length ? `<table><tr><th>Coin/Aktie</th><th>Menge</th><th>Kurs</th><th>Wert</th><th>Gewinn/Verlust</th></tr>
 ${pf.positions.map((x) => `<tr><td>${esc(x.symbol)}</td><td>${fmt(x.quantity, 6)}</td><td>${fmt(x.price)} $</td><td>${fmt(x.valueUsd)} $</td><td class="${x.unrealizedPnlUsd >= 0 ? "good" : "bad"}">${fmt(x.unrealizedPnlUsd)} $</td></tr>`).join("")}</table>` : `<div class="card empty">Keine offenen Positionen.</div>`}</div>
+${pf.openOrders.length ? `<h2>Offene Stop/Ziel-Orders</h2><div class="wrap"><table><tr><th>Aktie</th><th>Stück</th><th>Stop</th><th>Ziel</th><th>Glattstellen um</th></tr>
+${pf.openOrders.map((o) => `<tr><td>${esc(o.symbol)}</td><td>${fmt(o.qty, 0)}</td><td class="bad">${fmt(o.stop)} $</td><td class="good">${fmt(o.target)} $</td><td>${esc(o.flatBy || "–")} NY</td></tr>`).join("")}</table></div>` : ""}
 ${ch.enabled ? `<h2>Monatsfrist – Periode ${ch.period}</h2>
 <div class="grid">
 <div class="card"><div class="label">Ziel bis ${time(ch.periodEndsAt)}</div><div class="value">${fmt(ch.targetEquityUsd)} $</div><div class="label">Start der Periode: ${fmt(ch.startEquityUsd)} $</div></div>
